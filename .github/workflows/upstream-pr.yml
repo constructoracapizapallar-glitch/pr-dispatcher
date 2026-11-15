@@ -1,0 +1,82 @@
+name: Create Upstream PR
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_repo:
+        description: "Upstream repository in owner/repo format (e.g. Nodal-stellar/Nodal-AI)"
+        required: true
+        type: string
+      base:
+        description: "Base branch on upstream repository"
+        required: true
+        default: "main"
+        type: string
+      head:
+        description: "Head branch in forkOwner:branch format (e.g. Rentapro:fix/my-branch)"
+        required: true
+        type: string
+      title:
+        description: "Pull Request title"
+        required: true
+        type: string
+      body:
+        description: "Pull Request body (Markdown)"
+        required: true
+        type: string
+      draft:
+        description: "Open as draft PR"
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  create-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create or view upstream PR
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          UPSTREAM_REPO: ${{ inputs.upstream_repo }}
+          BASE_BRANCH: ${{ inputs.base }}
+          HEAD_BRANCH: ${{ inputs.head }}
+          PR_TITLE: ${{ inputs.title }}
+          PR_BODY: ${{ inputs.body }}
+          IS_DRAFT: ${{ inputs.draft }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::Missing GH_PAT secret. Add a Personal Access Token (classic with public_repo scope) named GH_PAT in Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+
+          DRAFT_FLAG=()
+          if [ "${IS_DRAFT}" = "true" ]; then
+            DRAFT_FLAG=(--draft)
+          fi
+
+          BODY_FILE="$(mktemp)"
+          printf '%s\n' "${PR_BODY}" > "${BODY_FILE}"
+
+          echo "Creating PR on ${UPSTREAM_REPO} (${HEAD_BRANCH} -> ${BASE_BRANCH})..."
+          if PR_URL=$(gh pr create \
+            -R "${UPSTREAM_REPO}" \
+            --base "${BASE_BRANCH}" \
+            --head "${HEAD_BRANCH}" \
+            --title "${PR_TITLE}" \
+            --body-file "${BODY_FILE}" \
+            "${DRAFT_FLAG[@]}" 2>&1); then
+            echo "PR_URL=${PR_URL}"
+            echo "### Pull Request Created" >> "${GITHUB_STEP_SUMMARY}"
+            echo "- **URL:** ${PR_URL}" >> "${GITHUB_STEP_SUMMARY}"
+          else
+            echo "${PR_URL}"
+            EXISTING=$(gh pr list -R "${UPSTREAM_REPO}" --head "${HEAD_BRANCH}" --state open --json url --jq '.[0].url // empty')
+            if [ -n "${EXISTING}" ]; then
+              echo "Existing open PR found: ${EXISTING}"
+              echo "### Existing Pull Request" >> "${GITHUB_STEP_SUMMARY}"
+              echo "- **URL:** ${EXISTING}" >> "${GITHUB_STEP_SUMMARY}"
+            else
+              exit 1
+            fi
+          fi
